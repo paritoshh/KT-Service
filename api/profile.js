@@ -1,4 +1,5 @@
 'use strict';
+//var jwt = require('jwt-simple');
 
 const AWS = require('aws-sdk');
 const dynamoDb = new AWS.DynamoDB.DocumentClient();
@@ -26,15 +27,22 @@ module.exports.submit = (event, context, callback) => {
   //const hostedSessions = requestBody.hostedSessions;
   //const requestedSessions = requestBody.requestedSessions;
   const experience = requestBody.experience;
+  const country = requestBody.country;
 
-  submitProfile(profileInfo(email, skills, interestedSkills, firstName, lastName,
-       location, dob, experience))
+
+  checkPermission(event, callback, email);
+
+
+  const profileInfoForUpdate = profileInfo(email, skills, interestedSkills, firstName, lastName,
+    location, country, dob, experience);
+  submitProfile(profileInfoForUpdate)
     .then(res => {
       callback(null, {
         statusCode: 200,
         body: JSON.stringify({
           message: `Sucessfully submitted profile with email ${email}`,
-          email: res.email
+          email: res.email,
+          profile: profileInfoForUpdate
         }),
       });
     })
@@ -43,7 +51,8 @@ module.exports.submit = (event, context, callback) => {
       callback(null, {
         statusCode: 500,
         body: JSON.stringify({
-          message: `Unable to submit profile with email ${email}`
+          message: `Unable to submit profile with email ${email}`,
+          emailInToken: emailInToken
         })
       })
     });
@@ -60,7 +69,7 @@ const submitProfile = profile => {
 };
 
 const profileInfo = (email, skills, interestedSkills, firstName, lastName,
-     location, dob, experience) => {
+  location, country, dob, experience) => {
   const timestamp = new Date().getTime();
   return {
     email: email,
@@ -69,6 +78,7 @@ const profileInfo = (email, skills, interestedSkills, firstName, lastName,
     firstName: firstName,
     lastName: lastName,
     location: location,
+    country: country,
     dob: dob,
     // learningPoints: learningPoints,
     // registeredSessions: registeredSessions,
@@ -80,12 +90,12 @@ const profileInfo = (email, skills, interestedSkills, firstName, lastName,
   };
 };
 
- /**
-  * Fetch user profile by email.
-  * @param {*} event 
-  * @param {*} context 
-  * @param {*} callback 
-  */
+/**
+ * Fetch user profile by email.
+ * @param {*} event 
+ * @param {*} context 
+ * @param {*} callback 
+ */
 module.exports.get = (event, context, callback) => {
   const params = {
     TableName: PROFILE_TABLE_NAME,
@@ -116,7 +126,7 @@ module.exports.get = (event, context, callback) => {
  * @param {*} context 
  * @param {*} callback 
  */
-module.exports.registerUnregisterSession = (event, context, callback)=>{
+module.exports.registerUnregisterSession = (event, context, callback) => {
   const email = event.pathParameters.email;
   const body = JSON.parse(event.body);
   const paramName = 'registeredSessions';
@@ -124,73 +134,74 @@ module.exports.registerUnregisterSession = (event, context, callback)=>{
   var isRegister = body.isRegister;
   var params = "";
   var indexOfSessionWhichNeedsToBeRemoved = body.indexOfSessionWhichNeedsToBeRemoved;
-  console.log("Email email: "+event.pathParameters.email);
-  console.log("session:: "+ paramValue);
+  console.log("Email email: " + event.pathParameters.email);
+  console.log("session:: " + paramValue);
+  checkPermission(event, callback, email);
 
   // //find the index of session.
   // console.log("isRegister in request: "+isRegister);
-   if(!isRegister){
-  //   console.log("UnRegister flow");
-  //   //Fetching index of session
-  //   const paramsForProfile = {
-  //     TableName: PROFILE_TABLE_NAME,
-  //     Key: {
-  //       email: event.pathParameters.email,
-  //     },
-  //   };
-  //   dynamoDb.get(paramsForProfile).promise()
-  //   .then(result => {
-  //     indexOfSessionWhichNeedsToBeRemoved = result
-  //     .Item
-  //     .registeredSessions.indexOf(paramValue);
-  //     callback(null, response);
-  //   })
-  //   .catch(error => {
-  //     console.error(error);
-  //     callback(new Error('Couldn\'t fetch profile.'));
-  //     return;
-  //   });
-  
-  params = {
-    Key: {
-      email: email
-    },
-    TableName: PROFILE_TABLE_NAME,
-    //ConditionExpression: 'attribute_exists(email)',
-    UpdateExpression: `REMOVE registeredSessions[${indexOfSessionWhichNeedsToBeRemoved}]`
-  };
-}
-else{
-  console.log("Register flow");
-  params = {
-    Key: {
-      email: email
-    },
-    TableName: PROFILE_TABLE_NAME,
-    ConditionExpression: 'attribute_exists(email)',
-    UpdateExpression: 'set #registeredSessions = list_append(if_not_exists(#registeredSessions, :empty_list), :paramValue)',
-    ExpressionAttributeValues : {
-      ':paramValue' : [paramValue],
-      ':empty_list': []
-    },
-    ExpressionAttributeNames: {
-      '#registeredSessions': 'registeredSessions'
-    },
-    ReturnValue: 'ALL_NEW'
-  };
+  if (!isRegister) {
+    //   console.log("UnRegister flow");
+    //   //Fetching index of session
+    //   const paramsForProfile = {
+    //     TableName: PROFILE_TABLE_NAME,
+    //     Key: {
+    //       email: event.pathParameters.email,
+    //     },
+    //   };
+    //   dynamoDb.get(paramsForProfile).promise()
+    //   .then(result => {
+    //     indexOfSessionWhichNeedsToBeRemoved = result
+    //     .Item
+    //     .registeredSessions.indexOf(paramValue);
+    //     callback(null, response);
+    //   })
+    //   .catch(error => {
+    //     console.error(error);
+    //     callback(new Error('Couldn\'t fetch profile.'));
+    //     return;
+    //   });
 
-}
-console.log("indexOfSessionWhichNeedsToBeRemoved value: "+indexOfSessionWhichNeedsToBeRemoved);
-console.log("params value: "+params);
+    params = {
+      Key: {
+        email: email
+      },
+      TableName: PROFILE_TABLE_NAME,
+      //ConditionExpression: 'attribute_exists(email)',
+      UpdateExpression: `REMOVE registeredSessions[${indexOfSessionWhichNeedsToBeRemoved}]`
+    };
+  }
+  else {
+    console.log("Register flow");
+    params = {
+      Key: {
+        email: email
+      },
+      TableName: PROFILE_TABLE_NAME,
+      ConditionExpression: 'attribute_exists(email)',
+      UpdateExpression: 'set #registeredSessions = list_append(if_not_exists(#registeredSessions, :empty_list), :paramValue)',
+      ExpressionAttributeValues: {
+        ':paramValue': [paramValue],
+        ':empty_list': []
+      },
+      ExpressionAttributeNames: {
+        '#registeredSessions': 'registeredSessions'
+      },
+      ReturnValue: 'ALL_NEW'
+    };
+
+  }
+  console.log("indexOfSessionWhichNeedsToBeRemoved value: " + indexOfSessionWhichNeedsToBeRemoved);
+  console.log("params value: " + params);
 
   return dynamoDb.update(params)
-  .promise()
-  .then(res=>{
-    callback(null, response(200, res))
-  })
-  .catch(err=>
-    callback(null, response(err.statusCode, err))
-  );
+    .promise()
+    .then(res => {
+      callback(null, response(200, res))
+    })
+    .catch(err =>
+      callback(null, response(err.statusCode, err))
+    );
 
 }
 /**
@@ -198,9 +209,18 @@ console.log("params value: "+params);
  * @param {*} statusCode 
  * @param {*} message 
  */
-function response(statusCode, message){
+function response(statusCode, message) {
   return {
     statusCode: statusCode,
     body: JSON.stringify(message)
   };
+}
+
+function checkPermission(event, callback, emailInRequest) {
+  var base64Url = event.headers.authorization.split('.')[1];
+  const header = Buffer.from(base64Url, 'base64').toString();
+  var emailInToken = JSON.parse(header).email;
+  if (emailInToken != emailInRequest) {
+    return callback(null, response(403, { error: 'Action not permitted.' }))
+  }
 }

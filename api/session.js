@@ -3,6 +3,7 @@
 const AWS = require('aws-sdk');
 const dynamoDb = new AWS.DynamoDB.DocumentClient();
 const SESSION_TABLE_NAME = 'kt-sessions';
+const PROFILE_TABLE_NAME = 'kt-dev';
 const { v4: uuidv4 } = require('uuid');
 const timestamp = new Date().getTime();
 
@@ -12,19 +13,22 @@ module.exports.submit = (event, context, callback) => {
   const requestBody = JSON.parse(event.body);
   const email = requestBody.email;
   const scheduledDate = requestBody.scheduledDate;
+  const fromTime = requestBody.fromTime;
+  const toTime = requestBody.toTime;
   const topic = requestBody.topic;
   const description = requestBody.description;
   const tags = requestBody.tags;
   const presenters = requestBody.presenters;
 
- 
-  submitSession(sessionInfo("-1", email, scheduledDate, topic, description, tags,
+  checkPermission(event, callback, email);
+
+  submitSession(sessionInfo("-1", email, scheduledDate, fromTime, toTime, topic, description, tags,
     presenters, "Scheduled", null, null))
     .then(res => {
       callback(null, {
         statusCode: 200,
-        headers: {"Access-Control-Allow-Origin":"*"},
-        
+        headers: { "Access-Control-Allow-Origin": "*" },
+
         body: JSON.stringify(
           res
         )
@@ -51,20 +55,22 @@ const submitSession = session => {
     .then(res => session);
 };
 
-const sessionInfo = (id, email, scheduledDate, topic, description, tags,
+const sessionInfo = (id, email, scheduledDate, fromTime, toTime, topic, description, tags,
   presenters, status, recordingLinks, feedback) => {
   var sessionId = id;
-  sessionId = sessionId<0?uuidv4():sessionId;
+  sessionId = sessionId < 0 ? uuidv4() : sessionId;
   return {
     id: sessionId,
     createdBy: email,
     scheduledDate: scheduledDate,
+    fromTime: fromTime,
+    toTime: toTime,
     topic: topic,
     description: description,
     tags: tags,
     presenters: presenters,
     status: status,
-    recordingLinks: recordingLinks,    
+    recordingLinks: recordingLinks,
     submittedAt: timestamp,
     updatedAt: timestamp,
     feedback: feedback
@@ -78,7 +84,7 @@ const sessionInfo = (id, email, scheduledDate, topic, description, tags,
  * @param {*} context 
  * @param {*} callback 
  */
-module.exports.get = (event, context, callback) => {  
+module.exports.get = (event, context, callback) => {
   const params = {
     TableName: SESSION_TABLE_NAME,
     Key: {
@@ -139,6 +145,8 @@ module.exports.update = (event, context, callback) => {
   const requestBody = JSON.parse(event.body);
   const email = requestBody.email;
   const scheduledDate = requestBody.scheduledDate;
+  const fromTime = requestBody.fromTime;
+  const toTime = requestBody.toTime;
   const topic = requestBody.topic;
   const description = requestBody.description;
   const tags = requestBody.tags;
@@ -153,8 +161,10 @@ module.exports.update = (event, context, callback) => {
   const attendees = requestBody.attendees;
   */
 
- submitSession(sessionInfo(id, email, scheduledDate, topic, description, tags,
-    presenters, status, recordingLinks,feedback))
+  checkPermission(event, callback, email);
+
+  submitSession(sessionInfo(id, email, scheduledDate, fromTime, toTime, topic, description, tags,
+    presenters, status, recordingLinks, feedback))
     .then(res => {
       callback(null, {
         statusCode: 200,
@@ -174,28 +184,29 @@ module.exports.update = (event, context, callback) => {
       })
     });
 };
-
 /**
  * Update feedback in session.
  * @param {*} event 
  * @param {*} context 
  * @param {*} callback 
  */
-module.exports.feedback = (event, context, callback)=>{
+module.exports.feedback = (event, context, callback) => {
   const id = event.pathParameters.id;
   const body = JSON.parse(event.body);
   const paramName = 'feedback';
   var paramValue = body.feedback;
   const email = body.email;
 
-  if(paramValue.rating<0 || paramValue.rating>5){
-    return callback(null, response(400, {error: 'Invalid rating submitted. It can be from 0 to 5.'}))
-  } 
-  paramValue.id = paramValue.id<0?uuidv4():paramValue.id;
+  if (paramValue.rating < 0 || paramValue.rating > 5) {
+    return callback(null, response(400, { error: 'Invalid rating submitted. It can be from 0 to 5.' }))
+  }
+  paramValue.id = paramValue.id < 0 ? uuidv4() : paramValue.id;
   paramValue.provider = email;
   paramValue.submittedAt = timestamp;
   paramValue.updatedAt = timestamp;
   paramValue.sessionId = id;
+
+  checkPermission(event, callback, email);
 
   const params = {
     Key: {
@@ -204,8 +215,8 @@ module.exports.feedback = (event, context, callback)=>{
     TableName: SESSION_TABLE_NAME,
     ConditionExpression: 'attribute_exists(id)',
     UpdateExpression: 'set #feedbacks = list_append(if_not_exists(#feedbacks, :empty_list), :paramValue)',
-    ExpressionAttributeValues : {
-      ':paramValue' : [paramValue],
+    ExpressionAttributeValues: {
+      ':paramValue': [paramValue],
       ':empty_list': []
     },
     ExpressionAttributeNames: {
@@ -215,13 +226,13 @@ module.exports.feedback = (event, context, callback)=>{
   };
 
   return dynamoDb.update(params)
-  .promise()
-  .then(res=>{
-    callback(null, response(200, res))
-  })
-  .catch(err=>
-    callback(null, response(err.statusCode, err))
-  );
+    .promise()
+    .then(res => {
+      callback(null, response(200, res))
+    })
+    .catch(err =>
+      callback(null, response(err.statusCode, err))
+    );
 
 }
 
@@ -230,9 +241,24 @@ module.exports.feedback = (event, context, callback)=>{
  * @param {*} statusCode 
  * @param {*} message 
  */
-function response(statusCode, message){
+function response(statusCode, message) {
   return {
     statusCode: statusCode,
     body: JSON.stringify(message)
   };
+}
+
+/**
+ * Check the user email in the token and validate against calling email id.
+ * @param {*} event 
+ * @param {*} callback 
+ * @param {*} emailInRequest 
+ */
+function checkPermission(event, callback, emailInRequest) {
+  var base64Url = event.headers.authorization.split('.')[1];
+  const header = Buffer.from(base64Url, 'base64').toString();
+  var emailInToken = JSON.parse(header).email;
+  if (emailInToken != emailInRequest) {
+    return callback(null, response(403, { error: 'Action not permitted.' }))
+  }
 }
