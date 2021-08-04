@@ -6,6 +6,8 @@ const SESSION_TABLE_NAME = 'kt-sessions';
 const PROFILE_TABLE_NAME = 'kt-dev';
 const { v4: uuidv4 } = require('uuid');
 const timestamp = new Date().getTime();
+const HOST_SESSION_POINTS = 20;
+const CANCEL_HOST_SESSION_POINTS = -20;
 
 //Create session.
 module.exports.submit = (event, context, callback) => {
@@ -19,16 +21,18 @@ module.exports.submit = (event, context, callback) => {
   const description = requestBody.description;
   const tags = requestBody.tags;
   const presenters = requestBody.presenters;
+  const inviteLink = requestBody.inviteLink;
 
   checkPermission(event, callback, email);
 
   submitSession(sessionInfo("-1", email, scheduledDate, fromTime, toTime, topic, description, tags,
-    presenters, "Scheduled", null, null))
+    presenters, "Scheduled", inviteLink, null, null))
     .then(res => {
+      //update learning points
+      updateLearningPointsOnHostOrAttendSession(email, callback, HOST_SESSION_POINTS);
       callback(null, {
         statusCode: 200,
         headers: { "Access-Control-Allow-Origin": "*" },
-
         body: JSON.stringify(
           res
         )
@@ -45,6 +49,7 @@ module.exports.submit = (event, context, callback) => {
     });
 };
 
+
 const submitSession = session => {
   console.log('Submitting session');
   const sessionInfo = {
@@ -56,7 +61,7 @@ const submitSession = session => {
 };
 
 const sessionInfo = (id, email, scheduledDate, fromTime, toTime, topic, description, tags,
-  presenters, status, recordingLinks, feedback) => {
+  presenters, status, inviteLink, recordingLinks, feedback) => {
   var sessionId = id;
   sessionId = sessionId < 0 ? uuidv4() : sessionId;
   return {
@@ -70,6 +75,7 @@ const sessionInfo = (id, email, scheduledDate, fromTime, toTime, topic, descript
     tags: tags,
     presenters: presenters,
     status: status,
+    inviteLink: inviteLink,
     recordingLinks: recordingLinks,
     submittedAt: timestamp,
     updatedAt: timestamp,
@@ -154,6 +160,7 @@ module.exports.update = (event, context, callback) => {
   const status = requestBody.status;
   const recordingLinks = requestBody.recordingLinks;
   const feedback = requestBody.feedback;
+  const inviteLink = requestBody.inviteLink;
   /**
    * other fields.
    * 
@@ -164,8 +171,15 @@ module.exports.update = (event, context, callback) => {
   checkPermission(event, callback, email);
 
   submitSession(sessionInfo(id, email, scheduledDate, fromTime, toTime, topic, description, tags,
-    presenters, status, recordingLinks, feedback))
+    presenters, status, inviteLink, recordingLinks, feedback))
     .then(res => {
+      //Currently a status == 'cancelled' only in one case. When user cancel his session.
+      //That's why we can put below condition.
+      if (status.toLowerCase() === 'cancelled') {
+        console.log("Reducing the hosting session in case of cancellation")
+        updateLearningPointsOnHostOrAttendSession(email, callback, CANCEL_HOST_SESSION_POINTS)
+
+      }
       callback(null, {
         statusCode: 200,
         body: JSON.stringify({
@@ -236,6 +250,41 @@ module.exports.feedback = (event, context, callback) => {
 
 }
 
+module.exports.recording = (event, context, callback) => {
+  const id = event.pathParameters.id;
+  const body = JSON.parse(event.body);
+  var paramValue = body.recordingLink;
+  const email = body.email;
+
+  checkPermission(event, callback, email);
+
+  const params = {
+    Key: {
+      id: id
+    },
+    TableName: SESSION_TABLE_NAME,
+    ConditionExpression: 'attribute_exists(id)',
+    UpdateExpression: 'set #recordingLinks = :paramValue',
+    ExpressionAttributeValues: {
+      ':paramValue': paramValue
+    },
+    ExpressionAttributeNames: {
+      '#recordingLinks': 'recordingLinks'
+    },
+    ReturnValue: 'ALL_NEW'
+  };
+
+  return dynamoDb.update(params)
+    .promise()
+    .then(res => {
+      callback(null, response(200, res))
+    })
+    .catch(err =>
+      callback(null, response(err.statusCode, err))
+    );
+
+}
+
 /**
  * Build response.
  * @param {*} statusCode 
@@ -261,4 +310,40 @@ function checkPermission(event, callback, emailInRequest) {
   if (emailInToken != emailInRequest) {
     return callback(null, response(403, { error: 'Action not permitted.' }))
   }
+}
+
+function updateLearningPointsOnHostOrAttendSession(email, callback, points) {
+  console.log("Update learning points called for: " + email);
+
+  var params = {
+    Key: {
+      email: email
+    },
+    TableName: PROFILE_TABLE_NAME,
+    ConditionExpression: 'attribute_exists(email)',
+    UpdateExpression: "SET #learningPoints = if_not_exists(#learningPoints, :start) + :num",
+
+    ExpressionAttributeValues: {
+      ":num": points,
+      ":start": 0
+    },
+    ExpressionAttributeNames: {
+      '#learningPoints': 'learningPoints'
+    },
+    ReturnValue: 'UPDATED_NEW'
+  };
+
+  return dynamoDb.update(params)
+    .promise()
+    .then(res => {
+      console.log("RES from update LP: " + res)
+      callback(null, response(200, res))
+    })
+    .catch(err => {
+      console.log("err from update LP: " + err)
+      callback(null, response(err.statusCode, err))
+    }
+
+    );
+
 }

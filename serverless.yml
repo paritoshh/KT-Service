@@ -119,6 +119,43 @@ functions:
           path: /session/{id}/feedback
           method: PUT
           authorizer: serviceAuthorizer
+  provideRecordingLink:
+    handler: api/session.recording
+    events:
+      - httpApi:
+          path: /session/{id}/recording
+          method: PUT
+          authorizer: serviceAuthorizer
+  createTickets:
+      handler: api/tickets.submit
+      events:
+        - httpApi:
+            path: /ticket
+            method: POST
+  createAuthUrl:
+      handler: api/google.consentUrl
+      events:
+        - httpApi:
+            path: /google
+            method: GET
+  fetchCode:
+      handler: api/google.code
+      events:
+        - httpApi:
+            path: /google/code
+            method: GET
+  createEvent:
+      handler: api/google.createEvent
+      events:
+        - httpApi:
+            path: /google/createEvent
+            method: POST
+  deleteEvent:
+      handler: api/google.deleteEvent
+      events:
+        - httpApi:
+            path: /google/deleteEvent
+            method: POST
 
 resources:
   Resources:

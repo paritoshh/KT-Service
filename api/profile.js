@@ -4,7 +4,8 @@
 const AWS = require('aws-sdk');
 const dynamoDb = new AWS.DynamoDB.DocumentClient();
 const PROFILE_TABLE_NAME = 'kt-dev';
-const SESSION_TABLE_NAME = 'kt-sessions';
+const REGISTER_SESSION_POINTS = 5;
+const UNREGISTER_SESSION_POINTS = -5;
 
 /**
  * Update profile of a user.
@@ -22,16 +23,10 @@ module.exports.submit = (event, context, callback) => {
   const lastName = requestBody.lastName;
   const location = requestBody.location;
   const dob = requestBody.dob;
-  //const learningPoints = requestBody.learingPoints;
-  //const registeredSessions = requestBody.registeredSessions;
-  //const hostedSessions = requestBody.hostedSessions;
-  //const requestedSessions = requestBody.requestedSessions;
   const experience = requestBody.experience;
   const country = requestBody.country;
 
-
   checkPermission(event, callback, email);
-
 
   const profileInfoForUpdate = profileInfo(email, skills, interestedSkills, firstName, lastName,
     location, country, dob, experience);
@@ -80,10 +75,6 @@ const profileInfo = (email, skills, interestedSkills, firstName, lastName,
     location: location,
     country: country,
     dob: dob,
-    // learningPoints: learningPoints,
-    // registeredSessions: registeredSessions,
-    // hostedSessions: hostedSessions,
-    // requestedSessions: requestedSessions,
     experience: experience,
     submittedAt: timestamp,
     updatedAt: timestamp,
@@ -197,6 +188,14 @@ module.exports.registerUnregisterSession = (event, context, callback) => {
   return dynamoDb.update(params)
     .promise()
     .then(res => {
+      console.log("isRegister ::" + isRegister)
+      if (!isRegister) {
+        updateLearningPointsOnRegisterOrUnRegisterSession(email, callback, UNREGISTER_SESSION_POINTS);
+      }
+      else {
+        updateLearningPointsOnRegisterOrUnRegisterSession(email, callback, REGISTER_SESSION_POINTS);
+      }
+
       callback(null, response(200, res))
     })
     .catch(err =>
@@ -223,4 +222,39 @@ function checkPermission(event, callback, emailInRequest) {
   if (emailInToken != emailInRequest) {
     return callback(null, response(403, { error: 'Action not permitted.' }))
   }
+}
+function updateLearningPointsOnRegisterOrUnRegisterSession(email, callback, points) {
+  console.log("Update learning points called for: " + email);
+
+  var params = {
+    Key: {
+      email: email
+    },
+    TableName: PROFILE_TABLE_NAME,
+    ConditionExpression: 'attribute_exists(email)',
+    UpdateExpression: "SET #learningPoints = if_not_exists(#learningPoints, :start) + :num",
+
+    ExpressionAttributeValues: {
+      ":num": points,
+      ":start": 0
+    },
+    ExpressionAttributeNames: {
+      '#learningPoints': 'learningPoints'
+    },
+    ReturnValue: 'UPDATED_NEW'
+  };
+
+  return dynamoDb.update(params)
+    .promise()
+    .then(res => {
+      console.log("RES from update LP: " + res)
+      callback(null, response(200, res))
+    })
+    .catch(err => {
+      console.log("err from update LP: " + err)
+      callback(null, response(err.statusCode, err))
+    }
+
+    );
+
 }
